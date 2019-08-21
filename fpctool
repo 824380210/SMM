@@ -1,0 +1,193 @@
+#!/usr/bin/env python3.5
+import subprocess
+import logging
+import sys
+import argparse
+#cmdline parameters
+parser = argparse.ArgumentParser(description='Query or Set the information to the Lenovo Fan and Power Controller(FPC).')
+parser.add_argument('-U','--USER', dest='username',default='USERID',help='specify the usernane to use to access the FPC')
+parser.add_argument('-P','--PASS', dest='password',default='PASSW0RD',help='specify the password to use to access the FPC')
+parser.add_argument('-H','--host', dest='host',default='192.168.0.100',help='specify the IP Address or hostname of the target FPC')
+parser.add_argument('-D','--debug', dest='debug',default=None,choices=['DEBUG','INFO','WARNING','ERROR','CRITICAL'],help='print more info in Debug mode')
+parser.add_argument('-I','--Identify', dest='status',default=None,choices=['on','off','blink'],help='Identify the FPC by turn on /off the Location LED')
+set_groups =  parser.add_argument_group(title="set the value to the FPC")
+get_groups =  parser.add_argument_group(title="get the value from the FPC")
+get_groups.add_argument('-Q','--query',dest='query',default=True,help="read the FPC IP Address / Firmware version/ Hostname / DNS domainname ")
+set_groups.add_argument('-d','--domain',dest='domain',default=None,help="Set the FPC domain name")
+set_groups.add_argument('-n','--hostname',dest='hostname',default=None,help="Set the FPC host  name")
+args = parser.parse_args()
+print(args)
+
+#config loggin
+logfile='/var/log/lenovo_FPC.log'
+level = {'DEBUG':logging.DEBUG,'INFO':logging.INFO,'WARNING':logging.WARNING,'ERROR':logging.ERROR,'CRITICAL':logging.CRITICAL}
+loglevel = logging.INFO if not  args.debug else level[args.debug]
+print(loglevel)
+#sys.exit(0)
+logging.basicConfig(level=loglevel,
+                format='%(asctime)s %(levelname)-8s %(message)s',
+                datefmt='%m-%d-%Y %H:%M:%S',
+                filename=logfile,
+                filemode='w')
+console = logging.StreamHandler()
+console.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s  %(levelname)-8s %(message)s')
+console.setFormatter(formatter)
+logging.getLogger('').addHandler(console)
+
+#
+#logging.info("this is the end")
+#sys.exit(0)
+logging.info("Start to run FPC tools for query / settings some parameters!!!")
+def runcmd(cmd,timeout=None):
+    """
+    run command for subprocess and return the output 
+    """
+    if not timeout:
+        timeout = 30
+    proc = subprocess.run(cmd,shell=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=timeout)
+    if proc.returncode != 0:
+        raise Exception("cmd run failed with {}".format(cmd))
+    else:
+        return(proc.stdout)
+#
+# read the mac of the FPC
+def get_fpc_mac():
+    cmd = "ipmitool -I lanplus -H  {}   -U  {}  -P {} lan print 1 | grep 'MAC Address'".format(args.host,args.username,args.password)
+    result = runcmd(cmd)
+    str = ':'.join(result.decode().split(':')[1:])
+    return str.strip()
+fpc_mac = get_fpc_mac()
+# read the hostname of FPC 0x0C 0x02 0x01 0xC3
+cmd  = "ipmitool -I lanplus -H  {}   -U  {}  -P {} raw 0x0C 0x02 0x01 0xC3 0x00 0x00".format(args.host,args.username,args.password)
+result = runcmd(cmd)
+cur_str = []
+for char in result.decode().split():
+    cur_str.append(chr(int("0x"+char,16)))
+# change the iem in the list to string
+mylist = [ str(i) for i in cur_str[2:] ]
+str3 = ''.join(mylist)
+fpc_hostname = str3.strip().strip('\r\n\t')
+cmd_spec = """
+
+0x0c 0x01  =  set lan config parameter
+0x0c 0x02  =  get lan config parameter
+#3 channel number ,should be always 0x01 
+#4 0xc3 for hostname 
+#4 0xc4 for dns domain name
+#5  
+#6 
+
+
+
+"""
+#cmd =  "ipmitool -I lanplus -H " + IP + " -U USERID  -P PASSW0RD raw 0x0C 0x02 0x01 0xC4 0x00 0x00" 
+cmd  = "ipmitool -I lanplus -H  {}  -U  {}  -P {} raw 0x0C 0x02 0x01 0xC4 0x00 0x00".format(args.host,args.username,args.password)
+result =  runcmd(cmd)
+cur_str = []
+for char in result.decode().split():
+    cur_str.append(chr(int("0x"+char,16)))
+# change the iem in the list to string
+mylist = [ str(i) for i in cur_str[2:] ]
+str3 = ''.join(mylist)
+fpc_domainname = str3.strip().strip('\r\n\t')
+#print("the current FPC hostname is {} and the domain name is {} ".format(fpc_hostname,fpc_domainname))
+# set the FPC LED on /off /blinking 
+def set_FPC_LED():
+    info = """
+    SetSySLED	0x32	0x97	Request:
+    Byte 1: Input type	
+	1: SysLocater LED
+	2: CheckLog LED
+    Byte 2:
+	0: Disable , 
+	1: Enable ,
+	2 blink (SysLocater only)
+    Response:
+    Byte 1 – completion code (0x00)
+    PARAM_OUT_OF_RANGE (0xC9)	This command is used to get the FPC LED status.
+    0: Off
+    1: On
+    2: Blink (Locater only)
+
+
+    """
+    if args.status and args.status == "on":
+        status = 0x1
+    elif args.status and args.status == "off":
+        status = 0x0
+    elif args.status and args.status == "blink":
+        status = 0x2
+    else:
+        logging.info("not support command")
+        sys.exit(1)
+    cmd = "ipmitool -I lanplus -H  {}  -U  {}  -P {} raw 0x32 0x97 0x1 {}".format(args.host,args.username,args.password,status)
+    runcmd(cmd)
+    logging.debug("command run ok ")
+if args.status:
+    set_FPC_LED()
+#cmd = "ipmitool -I lanplus -H " + IP + " -U USERID  -P PASSW0RD raw 0x32 0xa8"
+cmd  = "ipmitool -I lanplus -H  {}   -U  {}  -P {} raw 0x32 0xa8".format(args.host,args.username,args.password)
+result = runcmd(cmd)
+cur_ver_list = [ str(i) for i in result.decode().split()]
+# ['00', '02', '31', '01', '32', '01', '38', '42']
+#
+FPC_mode_check_info = '''
+•	Query: 0x32 0xD4 0x01
+o	0x01: Normal mode
+o	0x02: Shared I/O mode
+•	Configure to Shared IO mode: 0x32 0xD4 0x00 0x02
+•	Configure to Normal mode: 0x32 0xD4 0x00 0x01
+'''
+cmd = " ipmitool -I lanplus -H {} -U {} -P {} raw  0x32 0xD4 0x01".format(args.host,args.username,args.password)
+result = runcmd(cmd)
+if result.decode().strip() == "01":
+    mode = "Normal Mode"
+elif result.decode().strip() == "02":
+    mode = "ShareIO Mode"
+else:
+    mode = "unknown,check with TE"
+fpc_main_ver        = int(cur_ver_list[1])
+fpc_minor_ver       = int(cur_ver_list[2])
+fpc_build_main_ver  = int(cur_ver_list[6])
+fpc_build_minor_ver = chr(int(cur_ver_list[7],16))
+msg                 = "FPC identifier:\t{}".format(fpc_mac)
+logging.info(msg)
+fpc_mode            = mode   
+msg = "FPC  Version:  fhet{}{}-{}.{}\t Hostname:  {}\tDomain Name:  {} \t FPC Mode:\t{}".format(fpc_build_main_ver,fpc_build_minor_ver,fpc_main_ver,fpc_minor_ver,fpc_hostname,fpc_domainname,mode)
+logging.info(msg)
+#
+#
+def translate_str(str1):
+    str = str1.strip()
+    newstr = []
+    newstr.append(" 0x{:x} ".format(len(str)))
+    for i in str:
+        newstr.append(" 0x{:x} ".format(ord(i)))
+    mystr = ' '.join(newstr)
+    return mystr
+def set_hostname():
+    str = translate_str(args.hostname)
+    cmd = " ipmitool -I lanplus -H {}   -U {}  -P {} raw 0x0c 0x01 0x01 0xc3  ".format(args.host,args.username,args.password) + str
+    print(cmd)
+    runcmd(cmd)
+    msg = "hostanme set to {} Done".format(args.hostname)
+    logging.info(msg)
+def set_domainname():
+    str = translate_str(args.domain)
+    cmd = " ipmitool -I lanplus -H {}   -U {}  -P {} raw 0x0c 0x01 0x01 0xc4   ".format(args.host,args.username,args.password) + str
+    runcmd(cmd)
+    msg = "domain set to {} Done".format(args.domain)
+    logging.info(msg)
+#
+msg = "Start to check the configure parameter "
+if args.domain or args.hostname :
+    args.query = False
+    if args.domain:
+        msg = "found domain name {} to be set in this FPC".format(args.domain)
+        logging.info(msg)
+        set_domainname()
+    if args.hostname:
+        msg = "found host name {} to be set in this FPC".format(args.hostname)
+        logging.info(msg)
+        set_hostname()

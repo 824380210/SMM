@@ -139,6 +139,8 @@ o	0x02: Shared I/O mode
 •	Configure to Shared IO mode: 0x32 0xD4 0x00 0x02
 •	Configure to Normal mode: 0x32 0xD4 0x00 0x01
 '''
+msg = "FPC FW need to update to 38D or above to check the FW ShareIO mode "
+logging.info(msg)
 cmd = " ipmitool -I lanplus -H {} -U {} -P {} raw  0x32 0xD4 0x01".format(args.host,args.username,args.password)
 result = runcmd(cmd)
 if result.decode().strip() == "01":
